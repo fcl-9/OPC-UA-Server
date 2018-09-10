@@ -1,0 +1,14 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/Opc.Ua.Core
+/Server/bin
+/ServerControls.Net4/bin
+/ServerControls.Net4/obj
+/Server/obj
+/Opc.Ua.Configuration/obj
+/Opc.Ua.Configuration/bin
+/.vs/Server
+/Opc.Ua.Server/bin
+/Opc.Ua.Server/obj

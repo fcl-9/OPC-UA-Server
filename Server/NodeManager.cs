@@ -37,6 +37,12 @@ using System.Xml;
 using Opc.Ua;
 using Opc.Ua.Export;
 using Opc.Ua.Server;
+using Opc.Ua.Test;
+using Server.Boiler;
+using Server.Refrigerator;
+using ObjectIds = Opc.Ua.ObjectIds;
+using Objects = Server.Boiler.Objects;
+using ReferenceTypes = Opc.Ua.ReferenceTypes;
 
 
 namespace Server
@@ -50,9 +56,7 @@ namespace Server
         /// <summary>
         /// Initializes the node manager.
         /// </summary>
-        public NodeManager(IServerInternal server, ApplicationConfiguration configuration)
-        :
-            base(server, configuration, Namespaces.Empty)
+        public NodeManager(IServerInternal server, ApplicationConfiguration configuration):base(server, configuration)
         {
             SystemContext.NodeIdFactory = this;
 
@@ -64,6 +68,27 @@ namespace Server
             {
                 m_configuration = new ServerConfiguration();
             }
+
+
+            string[] namespaceUrls = new string[4];
+            namespaceUrls[0] = global::Server.Boiler.Namespaces.Boiler;
+            namespaceUrls[1] = global::Server.Boiler.Namespaces.Boiler + "/Instance";
+            namespaceUrls[2] = Namespaces.DemoServer;
+            namespaceUrls[3] = Namespaces.DemoServer + "/Instance";
+            SetNamespaces(namespaceUrls);
+
+
+
+
+            
+
+
+
+
+
+
+
+
         }
         #endregion
         
@@ -103,13 +128,43 @@ namespace Server
         {
             lock (Lock)
             {
+                IList<IReference> references = null;
+
+                if (!externalReferences.TryGetValue(ObjectIds.ObjectsFolder, out references))
+                {
+                    externalReferences[ObjectIds.ObjectsFolder] = references = new List<IReference>();
+                }
+
+                var myNodeFactory = new NodeFactory(this);
                 try
                 {
-                    // Import the initial data model from a NodeSet file
-                    Import(SystemContext, Path.Combine(filePath));
-                    m_RefrigeratorActualTemperatureTimer = new Timer(SimulateRefrigeratorTemperature, null, 1000, 1000);
-                    //m_RefrigeratorDoorTimer = new Timer(SimulateRefrigeratorDoorOpen, null, 1000, 1000);
-                    AttacOpenCloseMethod();
+                    LoadPredefinedNodes(SystemContext, externalReferences);
+                    // start a simulation that changes the values of the nodes.
+                    //// Folder to organize the refrigerator
+                    FolderState refrigeratorOrganizer = myNodeFactory.CreateFolder(null, "Refrigerators", "Refrigerators", NamespaceIndex);
+                    refrigeratorOrganizer.AddReference(ReferenceTypes.Organizes, true, ObjectIds.ObjectsFolder);
+                    references.Add(new NodeStateReference(ReferenceTypes.Organizes, false, refrigeratorOrganizer.NodeId));
+                    AddRootNotifier(refrigeratorOrganizer);
+                    // Add Refrigerators
+                    for (int i = 1; i <= 5; i++)
+                    {
+                        var fridgeFactory = new RefrigeratorFactory(refrigeratorOrganizer, "Refrigerator " + i, this);
+                        m_refrigeratorBuffer.Add(fridgeFactory, new Timer(AttachTemperatureSimulator, fridgeFactory, 5000, 5000));
+                    }
+                    AddPredefinedNode(SystemContext, refrigeratorOrganizer);
+
+                    //// Folder to organize the boiler
+                    FolderState boilerOrganizer = myNodeFactory.CreateFolder(null, "Boilers", "Boilers", NamespaceIndex);
+                    boilerOrganizer.AddReference(ReferenceTypes.Organizes, true, ObjectIds.ObjectsFolder);
+                    references.Add(new NodeStateReference(ReferenceTypes.Organizes, false, boilerOrganizer.NodeId));
+                    AddRootNotifier(boilerOrganizer);
+                    //// Add Boiler
+                    for (uint i = 1; i <= 5; i++)
+                    {
+                        var boilerFactory = new BoilerFactory(boilerOrganizer, "Boiler" + i, this, i);
+                        m_boilerBuffer.Add(boilerFactory, null);
+                    }
+                    AddPredefinedNode(SystemContext, boilerOrganizer);
                 }
                 catch (Exception e)
                 {
@@ -117,258 +172,32 @@ namespace Server
                 }
             }
         }
-
-        private void AttacOpenCloseMethod()
-        {
-            foreach (var methodIdentifier in m_RefrigeratorMethods)
-            {
-                var splitMethodIdentifier = methodIdentifier.Split(';');
-                var nodeId = new NodeId(uint.Parse(splitMethodIdentifier[1].Replace("i=", string.Empty)), ushort.Parse(splitMethodIdentifier[0].Replace("ns=", string.Empty)));
-                var myMethodNode = (MethodState)PredefinedNodes.Values.FirstOrDefault(nodeState => nodeState.NodeId.Equals(nodeId));
-                myMethodNode.OnCallMethod += OnCallMethodOpenDoor;
-            }
-        }
-
-        private ServiceResult OnCallMethodOpenDoor(ISystemContext context, MethodState method, IList<object> inputarguments, IList<object> outputarguments)
-        {
-            return ServiceResult.Good;
-        }
-
-        private void SimulateRefrigeratorDoorOpen(object state)
+        /// <summary>
+        /// Attach Temperature Simulator for the Boiler
+        /// </summary>
+        /// <param name="refrigeratorFactory"></param>
+        private void AttachTemperatureSimulator(object refrigeratorFactory)
         {
             lock (Lock)
             {
-               foreach (var doorIdentifier in m_RefrigeratorDoor)
-                    {
-                        var doorStateIdentifier = doorIdentifier.Split(';');
-                        var probability = m_RandomGenerator.NextDouble() * 100;
-                        if (probability > 98)
-                        {
-                            var writeValues = new List<WriteValue>();
-                            var valueToWrite = new WriteValue();
-                            valueToWrite.NodeId = new NodeId(uint.Parse(doorStateIdentifier[1].Replace("i=", string.Empty)), ushort.Parse(doorStateIdentifier[0].Replace("ns=", string.Empty)));
-                            valueToWrite.AttributeId = Attributes.Value;
-                            valueToWrite.IndexRange = string.Empty;
-                            //valueToWrite.Value = new DataValue() { Value = myNewValue };
-                            writeValues.Add(valueToWrite);
-
-                            List<ServiceResult> errors = Enumerable.Repeat(ServiceResult.Good, writeValues.Count).ToList();
-                            Write(SystemContext.OperationContext, writeValues, errors);
-                        }
-                }
-            }
-        }
-
-        private void SimulateRefrigeratorTemperature(object state)
-        {
-            lock (Lock)
-            {
-                foreach (var actualTemperatureIdentifier in m_RefrigeratorTemperature)
+                try
                 {
+                    var factory = (RefrigeratorFactory)refrigeratorFactory;
 
-                    var actualTemperature = actualTemperatureIdentifier.Split(';');
-
-                    var myNewValue = m_RandomGenerator.NextDouble() * 100;
-
-                    var writeValues = new List<WriteValue>();
-                    var valueToWrite = new WriteValue();
-                    valueToWrite.NodeId = new NodeId(uint.Parse(actualTemperature[1].Replace("i=", string.Empty)), ushort.Parse(actualTemperature[0].Replace("ns=", string.Empty)));
-                    valueToWrite.AttributeId = Attributes.Value;
-                    valueToWrite.IndexRange = String.Empty;
-                    valueToWrite.Value = new DataValue() { Value = myNewValue };
-                    writeValues.Add(valueToWrite);
-                    List<ServiceResult> errors = Enumerable.Repeat(ServiceResult.Good, writeValues.Count).ToList();
-                    Write(SystemContext.OperationContext, writeValues, errors);
+                    // Sets Actual Temperature
+                    factory.Refrigerator.SetChildValue(SystemContext, factory.ActualTemperature.BrowseName, m_randomizer.NextDouble() * (2.0 - (-5.0)) + (-5.0), false);
+                    // Set Motor Temperature Simulator
+                    factory.Refrigerator.SetChildValue(SystemContext, factory.MotorTemperature.BrowseName, m_randomizer.NextDouble() * (90.0 - 20.0) + 20.0, false);
                 }
-            }
-        }
-
-
-        private ServiceResult Import(ServerSystemContext context, string filePath)
-        {
-            try
-            {
-                ImportNodeSet(context, filePath);
-            }
-            catch (Exception ex)
-            {
-                Utils.Trace(Utils.TraceMasks.Error, "NodeSetImportNodeManager.Import", "Error loading node set: {0}", ex.Message);
-                throw new ServiceResultException(ex, StatusCodes.Bad);
-            }
-            return ServiceResult.Good;
-        }
-
-        private XmlElement[] ImportNodeSet(ISystemContext context, string filePath)
-        {
-            NodeStateCollection predefinedNodes = new NodeStateCollection();
-            List<string> newNamespaceUris = new List<string>();
-
-            XmlElement[] extensions = LoadFromNodeSet2Xml(context, filePath, true, newNamespaceUris, predefinedNodes);
-
-            // Add the node set to the node manager
-            for (int ii = 0; ii < predefinedNodes.Count; ii++)
-            {
-                AddPredefinedNode(context, predefinedNodes[ii]);
-            }
-
-            foreach (var item in NamespaceUris)
-            {
-                if (newNamespaceUris.Contains(item))
+                catch (Exception e)
                 {
-                    newNamespaceUris.Remove(item);
-                }
-            }
-
-            if (newNamespaceUris.Count > 0)
-            {
-                List<string> allNamespaceUris = newNamespaceUris.ToList();
-                allNamespaceUris.AddRange(NamespaceUris);
-
-                SetNamespaces(allNamespaceUris.ToArray());
-            }
-
-            UpdateRegistration(this, newNamespaceUris);
-
-            // Ensure the reverse references exist
-            Dictionary<NodeId, IList<IReference>> externalReferences = new Dictionary<NodeId, IList<IReference>>();
-            AddReverseReferences(externalReferences);
-
-            foreach (var item in externalReferences)
-            {
-                Server.NodeManager.AddReferences(item.Key, item.Value);
-            }
-
-            return extensions;
-        }
-
-        /// <summary>
-        /// Updates the registration of the node manager in case of nodeset2.xml import
-        /// </summary>
-        /// <param name="nodeManager">The node manager that performed the import.</param>
-        /// <param name="newNamespaceUris">The new namespace Uris that were imported.</param>
-        private void UpdateRegistration(INodeManager nodeManager, List<string> newNamespaceUris)
-        {
-            if (nodeManager == null || newNamespaceUris == null)
-            {
-                return;
-            }
-
-            int index = -1;
-            int arrayLength = 0;
-            foreach (var namespaceUri in newNamespaceUris)
-            {
-                index = Server.NamespaceUris.GetIndex(namespaceUri);
-                if (index == -1)
-                {
-                    // Something bad happened
-                    Utils.Trace(Utils.TraceMasks.Error, "Nodeset2xmlNodeManager.UpdateRegistration", "Namespace uri: " + namespaceUri + " was not found in the server's namespace table.");
-
-                    continue;
+                    Utils.Trace(e, "Unexpected error doing simulation.");
                 }
 
-                // m_namespaceManagers is declared Private in MasterNodeManager, therefore we must use Reflection to access it
-                FieldInfo fieldInfo = Server.NodeManager.GetType().GetField("m_namespaceManagers", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.GetField);
-
-                if (fieldInfo != null)
-                {
-                    var namespaceManagers = fieldInfo.GetValue(Server.NodeManager) as INodeManager[][];
-
-                    if (namespaceManagers != null)
-                    {
-                        if (index <= namespaceManagers.Length - 1)
-                        {
-                            arrayLength = namespaceManagers[index].Length;
-                            Array.Resize(ref namespaceManagers[index], arrayLength + 1);
-                            namespaceManagers[index][arrayLength] = nodeManager;
-                        }
-                        else
-                        {
-                            Array.Resize(ref namespaceManagers, namespaceManagers.Length + 1);
-                            namespaceManagers[namespaceManagers.Length - 1] = new INodeManager[] { nodeManager };
-                        }
-
-                        fieldInfo.SetValue(Server.NodeManager, namespaceManagers);
-                    }
-                }
+                
             }
         }
 
-        /// <summary>
-        /// Loads the NodeSet2.xml file and returns the Extensions data of the node set
-        /// </summary>
-        /// <param name="context">The context.</param>
-        /// <param name="filePath">The file path.</param>
-        /// <param name="updateTables">if set to <c>true</c> the namespace and server tables are updated with any new URIs.</param>
-        /// <param name="namespaceUris">Returns the NamespaceUris defined in the node set.</param>
-        /// <param name="predefinedNodes">The required NodeStateCollection</param>
-        /// <returns>The collection of global extensions of the NodeSet2.xml file.</returns>
-        private XmlElement[] LoadFromNodeSet2Xml(ISystemContext context, string filePath, bool updateTables, List<string> namespaceUris, NodeStateCollection predefinedNodes)
-        {
-            if (filePath == null) throw new ArgumentNullException(nameof(filePath));
-
-            byte[] readAllBytes = File.ReadAllBytes(filePath);
-            MemoryStream istrm = new MemoryStream(readAllBytes);
-
-            if (istrm == null)
-            {
-                throw ServiceResultException.Create(StatusCodes.BadDecodingError, "Could not load nodes from resource: {0}", filePath);
-            }
-
-            return LoadFromNodeSet2(context, istrm, updateTables, namespaceUris, predefinedNodes);
-        }
-
-        /// <summary>
-        /// Reads the schema information from a NodeSet2 XML document
-        /// </summary>
-        /// <param name="context">The context.</param>
-        /// <param name="istrm">The data stream containing a UANodeSet file.</param>
-        /// <param name="updateTables">If set to <c>true</c> the namespace and server tables are updated with any new URIs.</param>
-        /// <param name="namespaceUris">Returns the NamespaceUris defined in the node set.</param>
-        /// /// <param name="predefinedNodes">The required NodeStateCollection</param>
-        /// <returns>The collection of global extensions of the node set.</returns>
-        private XmlElement[] LoadFromNodeSet2(ISystemContext context, Stream istrm, bool updateTables, List<string> namespaceUris, NodeStateCollection predefinedNodes)
-        {
-            UANodeSet nodeSet = UANodeSet.Read(istrm);
-
-            if (nodeSet != null)
-            {
-                // Update namespace table
-                if (updateTables)
-                {
-                    if (nodeSet.NamespaceUris != null && context.NamespaceUris != null)
-                    {
-                        for (int ii = 0; ii < nodeSet.NamespaceUris.Length; ii++)
-                        {
-                            context.NamespaceUris.GetIndexOrAppend(nodeSet.NamespaceUris[ii]);
-                            namespaceUris.Add(nodeSet.NamespaceUris[ii]);
-                        }
-                    }
-                }
-
-                // Update server table
-                if (updateTables)
-                {
-                    if (nodeSet.ServerUris != null && context.ServerUris != null)
-                    {
-                        for (int ii = 0; ii < nodeSet.ServerUris.Length; ii++)
-                        {
-                            context.ServerUris.GetIndexOrAppend(nodeSet.ServerUris[ii]);
-                        }
-                    }
-                }
-
-                // Load nodes
-                nodeSet.Import(context, predefinedNodes);
-
-                return nodeSet.Extensions;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Frees any resources allocated for the address space.
-        /// </summary>
         public override void DeleteAddressSpace()
         {
             lock (Lock)
@@ -434,19 +263,14 @@ namespace Server
         #endregion
 
         #region Private Fields
+        private DataGenerator randomDataGenerator = new Opc.Ua.Test.DataGenerator(null);
+
         private ServerConfiguration m_configuration;
-        private string[] filePath = { "NodeSet", "Refrigerators.xml" };
-        private Timer m_RefrigeratorActualTemperatureTimer;
-        private Timer m_RefrigeratorDoorTimer;
 
-             
-
-        private string[] m_RefrigeratorTemperature = {"ns=4;i=2010", "ns=4;i=2026", "ns=4;i=2037"};
-        private string[] m_RefrigeratorDoor = {"", "", ""};
-        private string[] m_RefrigeratorMethods = { "ns=4;i=2005" };
-
-        private Random m_RandomGenerator = new Random();
-
+        private Dictionary<RefrigeratorFactory, Timer> m_refrigeratorBuffer = new Dictionary<RefrigeratorFactory, Timer>();
+        private Dictionary<BoilerFactory, Timer> m_boilerBuffer = new Dictionary<BoilerFactory, Timer>();
+        private BoilerState m_boiler2;
+        private Random m_randomizer = new Random();
         #endregion
     }
 }

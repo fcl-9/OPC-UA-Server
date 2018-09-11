@@ -34,7 +34,7 @@ namespace Server
     /// <summary>
     /// Stores the configuration the data access node manager.
     /// </summary>
-    [DataContract(Namespace=Namespaces.Empty)]
+    [DataContract(Namespace = Namespaces.DemoServer)]
     public class ServerConfiguration
     {
         #region Constructors

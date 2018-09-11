@@ -37,6 +37,6 @@ namespace Server
         /// <summary>
         /// The namespace for the nodes provided by the server.
         /// </summary>
-        public const string Empty = "http://opcfoundation.org/Quickstarts/Empty";
+        public const string DemoServer = "http://opcfoundation.org/Demo";
     }
 }

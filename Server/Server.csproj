@@ -45,7 +45,13 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Boiler\Boiler.Classes.cs" />
+    <Compile Include="Boiler\Boiler.Constants.cs" />
+    <Compile Include="Boiler\Boiler.DataTypes.cs" />
+    <Compile Include="Boiler\BoilerFactory.cs" />
+    <Compile Include="NodeFactory.cs" />
     <Compile Include="NodeManager.cs" />
+    <Compile Include="Refrigerator\RefrigeratorFactory.cs" />
     <Compile Include="Server.cs" />
     <Compile Include="ServerConfiguration.cs" />
     <Compile Include="Namespaces.cs" />
